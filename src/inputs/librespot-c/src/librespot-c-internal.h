@@ -337,9 +337,10 @@ struct sp_session
   // Go to next step in a request sequence
   struct event *continue_ev;
 
-  // Current (or last) message being processed
-  enum sp_msg_type msg_type_queued;
+  // Current, next and subsequent message being processed
+  enum sp_msg_type msg_type_last;
   enum sp_msg_type msg_type_next;
+  enum sp_msg_type msg_type_queued;
   int (*response_handler)(uint8_t *, size_t, struct sp_session *);
 
   struct sp_session *next;

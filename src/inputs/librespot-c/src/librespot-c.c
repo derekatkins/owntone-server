@@ -236,6 +236,17 @@ session_error(struct sp_session *session, enum sp_error err)
   ap_disconnect(&session->conn);
 }
 
+// Called if an access point disconnects. Will clear current connection and
+// start a flow where the same request will be made to another access point.
+static void
+session_retry(struct sp_session *session)
+{
+  sp_cb.logmsg("Retrying after disconnect (occurred at msg %d)\n", session->msg_type_last);
+
+  ap_disconnect(&session->conn);
+
+  request_make(session->msg_type_last, session);
+}
 
 /* ------------------------ Main sequence control --------------------------- */
 
@@ -370,7 +381,10 @@ response_cb(int fd, short what, void *arg)
   return;
 
  error:
-  session_error(session, ret);
+  if (ret == SP_ERR_NOCONNECTION)
+    session_retry(session);
+  else
+    session_error(session, ret);
 }
 
 static int
@@ -379,13 +393,14 @@ relogin(enum sp_msg_type type, struct sp_session *session)
   int ret;
   time_t now;
 
-  // relogin() will be called after a disconnect, but if we are quickly
-  // disconnected again then we will take a break
+  // Protection against flooding the access points with reconnection attempts
   now = time(NULL);
-  if (now < session->cooldown_ts)
-    RETURN_ERROR(SP_ERR_NOCONNECTION, "Cannot connect to access point, cooldown after disconnect is in effect");
-  else
+  if (now > session->cooldown_ts + SP_AP_COOLDOWN_SECS) // Last call to relogin was a long time ago
+    session->cooldown_ts = now;
+  else if (now >= session->cooldown_ts) // Last relogin() was recent, so disallow more relogin() for a while
     session->cooldown_ts = now + SP_AP_COOLDOWN_SECS;
+  else
+    RETURN_ERROR(SP_ERR_NOCONNECTION, "Cannot connect to access point, cooldown after disconnect is in effect");
 
   ret = request_make(MSG_TYPE_CLIENT_HELLO, session);
   if (ret < 0)
@@ -436,6 +451,7 @@ request_make(enum sp_msg_type type, struct sp_session *session)
   else
     event_active(session->continue_ev, 0, 0);
 
+  session->msg_type_last = type;
   session->msg_type_next = msg.type_next;
   session->response_handler = msg.response_handler;
 
